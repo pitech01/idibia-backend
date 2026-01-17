@@ -45,4 +45,15 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/profile', [App\Http\Controllers\ProfileController::class, 'show']);
     Route::put('/profile', [App\Http\Controllers\ProfileController::class, 'update']);
     Route::put('/profile/password', [App\Http\Controllers\ProfileController::class, 'updatePassword']);
+
+    Route::get('/payments', [App\Http\Controllers\PaymentController::class, 'index']);
+    Route::post('/payments/initialize', [App\Http\Controllers\PaymentController::class, 'initialize']);
+    Route::post('/payments/verify', [App\Http\Controllers\PaymentController::class, 'verify']);
+
+    // Chat Routes
+    Route::get('/chats', [App\Http\Controllers\ChatController::class, 'index']);
+    Route::post('/chats/start', [App\Http\Controllers\ChatController::class, 'start']);
+    Route::get('/chats/{id}', [App\Http\Controllers\ChatController::class, 'show']);
+    Route::post('/chats/{id}/send', [App\Http\Controllers\ChatController::class, 'sendMessage']);
+    Route::put('/chats/{id}/read', [App\Http\Controllers\ChatController::class, 'markRead']);
 });
