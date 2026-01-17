@@ -139,7 +139,9 @@ class AuthController extends Controller
         
         // Send Email
         try {
-            \Illuminate\Support\Facades\Mail::to($request->email)->send(new \App\Mail\OtpMail($otp));
+            // TEMPORARY: Commented out to prevent 504 Gateway Timeout (SMTP not reachable)
+            // \Illuminate\Support\Facades\Mail::to($request->email)->send(new \App\Mail\OtpMail($otp));
+            \Illuminate\Support\Facades\Log::info("OTP for {$request->email}: $otp");
         } catch (\Exception $e) {
             \Illuminate\Support\Facades\Log::error('Mail sending failed: ' . $e->getMessage());
             // Proceed anyway, but maybe return the OTP for dev purposes
