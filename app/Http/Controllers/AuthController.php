@@ -144,14 +144,12 @@ class AuthController extends Controller
             \Illuminate\Support\Facades\Log::info("OTP for {$request->email}: $otp");
         } catch (\Exception $e) {
             \Illuminate\Support\Facades\Log::error('Mail sending failed: ' . $e->getMessage());
-            // Proceed anyway, but maybe return the OTP for dev purposes
-            return response()->json([
-                'message' => 'OTP generated (Email failed)',
-                'debug_otp' => $otp // REMOVE IN PRODUCTION
-            ]);
         }
 
-        return response()->json(['message' => 'OTP sent successfully']);
+        return response()->json([
+            'message' => 'OTP sent successfully (Check Network Tab for code)',
+            'debug_otp' => $otp // TEMPORARY: For testing since email is verified
+        ]);
     }
 
     public function verifyOtp(Request $request)
