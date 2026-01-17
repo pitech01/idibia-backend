@@ -138,7 +138,16 @@ class AuthController extends Controller
         \Illuminate\Support\Facades\Cache::put('otp_' . $request->email, (string)$otp, 1200);
         
         // Send Email
-        \Illuminate\Support\Facades\Mail::to($request->email)->send(new \App\Mail\OtpMail($otp));
+        try {
+            \Illuminate\Support\Facades\Mail::to($request->email)->send(new \App\Mail\OtpMail($otp));
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error('Mail sending failed: ' . $e->getMessage());
+            // Proceed anyway, but maybe return the OTP for dev purposes
+            return response()->json([
+                'message' => 'OTP generated (Email failed)',
+                'debug_otp' => $otp // REMOVE IN PRODUCTION
+            ]);
+        }
 
         return response()->json(['message' => 'OTP sent successfully']);
     }
