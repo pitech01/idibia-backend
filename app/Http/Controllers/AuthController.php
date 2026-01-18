@@ -139,10 +139,12 @@ class AuthController extends Controller
         
         // Send Email
         try {
+            \Illuminate\Support\Facades\Log::info("Attempting to send OTP email to {$request->email}");
             \Illuminate\Support\Facades\Mail::to($request->email)->send(new \App\Mail\OtpMail($otp));
-            \Illuminate\Support\Facades\Log::info("OTP for {$request->email}: $otp");
+            \Illuminate\Support\Facades\Log::info("OTP email sent successfully to {$request->email}: $otp");
         } catch (\Exception $e) {
             \Illuminate\Support\Facades\Log::error('Mail sending failed: ' . $e->getMessage());
+            // Don't crash, just log. In production, you might want to throw or return error.
         }
 
         return response()->json([

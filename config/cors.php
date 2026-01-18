@@ -19,11 +19,12 @@ return [
 
     'allowed_methods' => ['*'],
 
-<<<<<<< HEAD
-    'allowed_origins' => ['http://localhost:5173', 'http://127.0.0.1:5173', 'https://idibia-frontend.vercel.app'],
-=======
-    'allowed_origins' => ['http://localhost:5173', 'http://127.0.0.1:5173', 'https://idbia.vercel.app'],
->>>>>>> 5bf585264ec3b8b08d07202f5f0343f0d1d723a0
+    'allowed_origins' => [
+        'http://localhost:5173',
+        'http://127.0.0.1:5173', 
+        'https://idibia-frontend.vercel.app',
+        'https://idibia.vercel.app'
+    ],
 
     'allowed_origins_patterns' => [],
 
