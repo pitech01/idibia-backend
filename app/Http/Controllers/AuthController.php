@@ -134,7 +134,7 @@ class AuthController extends Controller
             ]);
         }
 
-        $user->load('patient');
+        $user->load(['patient', 'doctor']);
         $token = $user->createToken('auth_token')->plainTextToken;
 
         return response()->json([
