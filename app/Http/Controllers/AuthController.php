@@ -19,7 +19,7 @@ class AuthController extends Controller
         $validated = $request->validate([
             'firstName' => 'required|string|max:255',
             'lastName' => 'required|string|max:255',
-            'email' => 'required|string|email|max:255|unique:users',
+            'email' => 'required|string|email|max:255',
             'password' => 'required|string|min:8',
             'role' => 'required|string|in:patient,doctor,nurse',
             'otp' => 'nullable|string', // Add OTP validation
@@ -40,8 +40,7 @@ class AuthController extends Controller
             'virtualOnly' => 'boolean'
         ]);
 
-        // Verify OTP if provided (strictly enforcing it would be better, but optional for backward comp if needed)
-        // Check if we have a verified OTP in cache KEY
+        // Verify OTP logic...
         if ($request->has('otp')) {
              $cachedOtp = \Illuminate\Support\Facades\Cache::get('otp_' . $validated['email']);
              if (!$cachedOtp || $cachedOtp !== $request->otp) {
@@ -53,36 +52,56 @@ class AuthController extends Controller
              \Illuminate\Support\Facades\Cache::forget('otp_' . $validated['email']);
         }
 
-        $user = User::create([
-            'name' => $validated['firstName'] . ' ' . $validated['lastName'],
-            'email' => $validated['email'],
-            'password' => Hash::make($validated['password']),
-            'role' => $validated['role'],
-        ]);
+        // Check if user exists
+        $user = User::where('email', $validated['email'])->first();
+
+        if ($user) {
+            // If user exists, check if they are permitted to "re-register" (i.e., incomplete)
+            $user->load('patient');
+            if ($user->patient && $user->patient->is_completed) {
+                return response()->json(['message' => 'Account already exists. Please Login.'], 400);
+            }
+            // Update existing incomplete user
+            $user->update([
+                'name' => $validated['firstName'] . ' ' . $validated['lastName'],
+                'password' => Hash::make($validated['password']),
+                'role' => $validated['role'],
+            ]);
+        } else {
+            // Create New User
+            $user = User::create([
+                'name' => $validated['firstName'] . ' ' . $validated['lastName'],
+                'email' => $validated['email'],
+                'password' => Hash::make($validated['password']),
+                'role' => $validated['role'],
+            ]);
+        }
 
         if ($request->has('otp')) {
              $user->markEmailAsVerified();
         }
 
         if ($validated['role'] === 'patient') {
-            Patient::create([
-                'user_id' => $user->id,
-                'dob' => $validated['dob'] ?? null,
-                'gender' => $validated['gender'] ?? null,
-                'phone' => $validated['phone'] ?? null,
-                'blood_group' => $validated['bloodGroup'] ?? null,
-                'allergies' => $validated['allergies'] ?? null,
-                'conditions' => $validated['conditions'] ?? null,
-                'emergency_name' => $validated['emergencyName'] ?? null,
-                'emergency_phone' => $validated['emergencyPhone'] ?? null,
-                'address' => $validated['address'] ?? null,
-                'city' => $validated['city'] ?? null,
-                'state' => $validated['state'] ?? null,
-                'country' => $validated['country'] ?? null,
-                'zip_code' => $validated['zipCode'] ?? null,
-                'virtual_only' => $validated['virtualOnly'] ?? false,
-                'is_completed' => false,
-            ]);
+            Patient::updateOrCreate(
+                ['user_id' => $user->id],
+                [
+                    'dob' => $validated['dob'] ?? null,
+                    'gender' => $validated['gender'] ?? null,
+                    'phone' => $validated['phone'] ?? null,
+                    'blood_group' => $validated['bloodGroup'] ?? null,
+                    'allergies' => $validated['allergies'] ?? null,
+                    'conditions' => $validated['conditions'] ?? null,
+                    'emergency_name' => $validated['emergencyName'] ?? null,
+                    'emergency_phone' => $validated['emergencyPhone'] ?? null,
+                    'address' => $validated['address'] ?? null,
+                    'city' => $validated['city'] ?? null,
+                    'state' => $validated['state'] ?? null,
+                    'country' => $validated['country'] ?? null,
+                    'zip_code' => $validated['zipCode'] ?? null,
+                    'virtual_only' => $validated['virtualOnly'] ?? false,
+                    'is_completed' => false,
+                ]
+            );
         }
 
         // Create token
@@ -133,7 +152,18 @@ class AuthController extends Controller
 
     public function sendOtp(Request $request)
     {
-        $request->validate(['email' => 'required|email|unique:users,email']);
+        $request->validate(['email' => 'required|email']);
+
+        // Check if user exists and is completed
+        $user = User::where('email', $request->email)->first();
+        if ($user) {
+            $user->load('patient');
+            if ($user->patient && $user->patient->is_completed) {
+                return response()->json(['message' => 'Account already exists. Please Login.'], 400);
+            }
+            // If user exists but NOT completed, we assume they want to restart/continue registration.
+            // We allow sending OTP.
+        }
 
         $otp = rand(100000, 999999);
         // Cache for 20 minutes
