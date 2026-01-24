@@ -52,6 +52,7 @@ class ProfileController extends Controller
                 'emergency_name' => $validated['emergency_name'] ?? null,
                 'emergency_phone' => $validated['emergency_phone'] ?? null,
                 'emergency_relationship' => $validated['emergency_relationship'] ?? null,
+                'is_completed' => true,
             ]
         );
         

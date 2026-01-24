@@ -81,6 +81,7 @@ class AuthController extends Controller
                 'country' => $validated['country'] ?? null,
                 'zip_code' => $validated['zipCode'] ?? null,
                 'virtual_only' => $validated['virtualOnly'] ?? false,
+                'is_completed' => false,
             ]);
         }
 
@@ -114,6 +115,7 @@ class AuthController extends Controller
             ]);
         }
 
+        $user->load('patient');
         $token = $user->createToken('auth_token')->plainTextToken;
 
         return response()->json([
