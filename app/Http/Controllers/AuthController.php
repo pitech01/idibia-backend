@@ -176,7 +176,7 @@ class AuthController extends Controller
             \Illuminate\Support\Facades\Log::info("OTP email sent successfully to {$request->email}: $otp");
         } catch (\Exception $e) {
             \Illuminate\Support\Facades\Log::error('Mail sending failed: ' . $e->getMessage());
-            // Don't crash, just log. In production, you might want to throw or return error.
+            return response()->json(['message' => 'Failed to send email: ' . $e->getMessage()], 500);
         }
 
         return response()->json([
