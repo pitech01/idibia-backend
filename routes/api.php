@@ -58,4 +58,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/chats/{id}/read', [App\Http\Controllers\ChatController::class, 'markRead']);
 
     Route::get('/patient/dashboard', [App\Http\Controllers\PatientDashboardController::class, 'index']);
+    
+    // Doctor Profile
+    Route::post('/doctor/profile', [App\Http\Controllers\DoctorController::class, 'register']);
 });
