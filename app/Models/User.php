@@ -21,12 +21,37 @@ class User extends Authenticatable implements MustVerifyEmail
 
     public function doctor()
     {
-        return $this->hasOne(Doctor::class);
+        return $this->hasOne(\App\Models\Doctor::class);
     }
 
     public function payments()
     {
         return $this->hasMany(Payment::class);
+    }
+
+    public function paymentMethods()
+    {
+        return $this->hasMany(PaymentMethod::class);
+    }
+
+    public function supportTickets()
+    {
+        return $this->hasMany(\App\Models\SupportTicket::class);
+    }
+
+    public function appointments()
+    {
+        return $this->hasMany(Appointment::class, 'patient_id');
+    }
+
+    public function doctorAppointments()
+    {
+        return $this->hasMany(Appointment::class, 'doctor_id');
+    }
+
+    public function creditTransactions()
+    {
+        return $this->hasMany(CreditTransaction::class);
     }
 
     /**
@@ -39,6 +64,11 @@ class User extends Authenticatable implements MustVerifyEmail
         'email',
         'password',
         'role',
+        'credits',
+        'wallet_balance',
+        'avatar',
+        'settings',
+        'status',
     ];
 
     /**
@@ -61,6 +91,7 @@ class User extends Authenticatable implements MustVerifyEmail
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'settings' => 'array',
         ];
     }
 }

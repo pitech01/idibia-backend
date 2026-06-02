@@ -46,8 +46,16 @@ class ChatController extends Controller
         $appointment = \App\Models\Appointment::findOrFail($request->appointment_id);
         
         // Ensure user is part of appointment
-        if ($request->user()->id !== $appointment->patient_id && $request->user()->id !== $appointment->doctor_id) {
-            abort(403, 'Unauthorized access to appointment');
+        $userId = $request->user()->id;
+        if ((int) $userId !== (int) $appointment->patient_id && (int) $userId !== (int) $appointment->doctor_id) {
+            return response()->json([
+                'message' => 'Unauthorized access to appointment',
+                'debug' => [
+                    'user_id' => $userId,
+                    'patient_id' => $appointment->patient_id,
+                    'doctor_id' => $appointment->doctor_id
+                ]
+            ], 403);
         }
 
         // Find existing or create new
@@ -74,8 +82,22 @@ class ChatController extends Controller
         $userId = $request->user()->id;
         $chat = \App\Models\Chat::findOrFail($id);
 
-        if ($chat->patient_id !== $userId && $chat->doctor_id !== $userId) {
+        if ((int) $chat->patient_id !== (int) $userId && (int) $chat->doctor_id !== (int) $userId) {
             abort(403);
+        }
+
+        // Time Check: Exact start time enforcement for appointment-linked chats
+        if ($chat->appointment_id) {
+            $appointment = \App\Models\Appointment::find($chat->appointment_id);
+            if ($appointment) {
+                $now = now();
+                $apptTime = \Carbon\Carbon::parse($appointment->appointment_date->format('Y-m-d') . ' ' . $appointment->start_time);
+                if ($now->lt($apptTime)) {
+                    return response()->json([
+                        'message' => 'Chat will be available at the scheduled appointment time: ' . $apptTime->format('h:i A')
+                    ], 403);
+                }
+            }
         }
 
         // Start timer on first message if needed

@@ -12,9 +12,12 @@ class Payment extends Model
 
     protected $fillable = [
         'user_id',
+        'appointment_id',
+        'doctor_id',
         'reference',
         'amount',
         'status',
+        'paid_at',
         'type',
         'method',
         'description'
@@ -24,4 +27,8 @@ class Payment extends Model
     {
         return $this->belongsTo(User::class);
     }
+
+    protected $casts = [
+        'paid_at' => 'datetime',
+    ];
 }

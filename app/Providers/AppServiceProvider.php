@@ -3,7 +3,9 @@
 namespace App\Providers;
 
 use Illuminate\Support\ServiceProvider;
-
+use Illuminate\Console\Events\CommandStarting;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Artisan;
 class AppServiceProvider extends ServiceProvider
 {
     /**
@@ -22,5 +24,22 @@ class AppServiceProvider extends ServiceProvider
         \Illuminate\Auth\Notifications\ResetPassword::createUrlUsing(function (object $notifiable, string $token) {
             return config('app.frontend_url', 'http://localhost:5173')."/reset-password?token=$token&email={$notifiable->getEmailForPasswordReset()}";
         });
+
+        if ($this->app->runningInConsole()) {
+            Event::listen(CommandStarting::class, function (CommandStarting $event) {
+                if ($event->command === 'serve') {
+                    // Use a detached process to start signaling server so it doesn't block boot
+                    if (strncasecmp(PHP_OS, 'WIN', 3) === 0) {
+                        pclose(popen("start /B php artisan signaling:start > NUL 2>&1", "r"));
+                    } else {
+                        exec("php artisan signaling:start > /dev/null 2>&1 &");
+                    }
+                    
+                    if ($event->output) {
+                        $event->output->writeln('<info>Signaling server checked/started alongside artisan serve.</info>');
+                    }
+                }
+            });
+        }
     }
 }

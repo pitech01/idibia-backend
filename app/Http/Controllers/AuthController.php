@@ -102,6 +102,17 @@ class AuthController extends Controller
                     'is_completed' => false,
                 ]
             );
+        } elseif ($validated['role'] === 'doctor') {
+            \App\Models\Doctor::updateOrCreate(
+                ['user_id' => $user->id],
+                [
+                    'status' => 'pending_approval',
+                    'is_verified' => false,
+                    // Map any available fields from request if they exist, or leave null for now
+                    'city' => $validated['city'] ?? null,
+                    'state' => $validated['state'] ?? null,
+                ]
+            );
         }
 
         // Create token
@@ -134,11 +145,68 @@ class AuthController extends Controller
             ]);
         }
 
+        if ($user->status === 'suspended') {
+            throw ValidationException::withMessages([
+                'email' => ['Your account has been suspended. Please contact support.'],
+            ]);
+        }
+
+        // Check for 2FA
+        $twoFactorEnabled = $user->settings['twoFactor'] ?? false;
+        if ($twoFactorEnabled) {
+            $otp = rand(100000, 999999);
+            \Illuminate\Support\Facades\Cache::put('2fa_otp_' . $user->email, (string)$otp, 600); // 10 minutes
+
+            try {
+                \Illuminate\Support\Facades\Mail::to($user->email)->send(new \App\Mail\OtpMail($otp));
+            } catch (\Exception $e) {
+                // Log error but continue for testing if needed, or fail
+                \Illuminate\Support\Facades\Log::error("2FA OTP Mail failed: " . $e->getMessage());
+            }
+
+            return response()->json([
+                'two_factor_required' => true,
+                'message' => 'OTP sent to your email',
+                'debug_otp' => $otp // Optional: remove in production
+            ]);
+        }
+
         $user->load(['patient', 'doctor']);
         $token = $user->createToken('auth_token')->plainTextToken;
 
         return response()->json([
             'message' => 'Login successful',
+            'user' => $user,
+            'token' => $token
+        ]);
+    }
+
+    public function verify2FA(Request $request)
+    {
+        $request->validate([
+            'email' => 'required|email',
+            'code' => 'required|string',
+        ]);
+
+        $cachedOtp = \Illuminate\Support\Facades\Cache::get('2fa_otp_' . $request->email);
+
+        if (!$cachedOtp || $cachedOtp !== $request->code) {
+            return response()->json(['message' => 'Invalid or expired OTP'], 422);
+        }
+
+        $user = User::where('email', $request->email)->firstOrFail();
+
+        if ($user->status === 'suspended') {
+            return response()->json(['message' => 'Your account has been suspended.'], 403);
+        }
+
+        \Illuminate\Support\Facades\Cache::forget('2fa_otp_' . $request->email);
+
+        $user->load(['patient', 'doctor']);
+        $token = $user->createToken('auth_token')->plainTextToken;
+
+        return response()->json([
+            'message' => '2FA verified',
             'user' => $user,
             'token' => $token
         ]);

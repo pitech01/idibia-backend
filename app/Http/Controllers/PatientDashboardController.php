@@ -13,12 +13,16 @@ class PatientDashboardController extends Controller
         // 1. Upcoming Appointment
         $upcomingAppointment = \App\Models\Appointment::with('doctor')
             ->where('patient_id', $user->id)
-            ->where('status', '!=', 'cancelled')
+            ->where('status', 'not like', 'cancelled%')
             ->where('status', '!=', 'completed')
             ->where('appointment_date', '>=', now()->toDateString())
             ->orderBy('appointment_date')
             ->orderBy('start_time')
             ->first();
+
+        if ($upcomingAppointment) {
+            $upcomingAppointment->iso_start_time = \Carbon\Carbon::parse($upcomingAppointment->appointment_date->format('Y-m-d') . ' ' . $upcomingAppointment->start_time)->toIso8601String();
+        }
 
         // 2. Wallet Balance
         // Ensure patient relation is loaded or accessed

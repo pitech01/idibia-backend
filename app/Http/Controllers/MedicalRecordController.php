@@ -8,10 +8,19 @@ class MedicalRecordController extends Controller
 {
     public function index(Request $request)
     {
-        $records = \App\Models\MedicalRecord::where('patient_id', $request->user()->id)
-            ->orderBy('record_date', 'desc')
-            ->get();
-        return response()->json($records);
+        try {
+            if (!\Illuminate\Support\Facades\Schema::hasTable('medical_records')) {
+                throw new \Exception('Table medical_records not found');
+            }
+
+            $records = \App\Models\MedicalRecord::where('patient_id', $request->user()->id)
+                ->orderBy('record_date', 'desc')
+                ->get();
+            return response()->json($records);
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error('MedicalRecord Error: ' . $e->getMessage());
+            return response()->json(['message' => 'Failed to load records: ' . $e->getMessage()], 500);
+        }
     }
 
     public function store(Request $request)

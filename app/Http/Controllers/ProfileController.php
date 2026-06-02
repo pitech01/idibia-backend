@@ -78,4 +78,30 @@ class ProfileController extends Controller
         
         return response()->json(['message' => 'Password updated successfully']);
     }
+
+    public function updateAvatar(Request $request)
+    {
+        $request->validate([
+            'avatar' => 'required|image|mimes:jpeg,png,jpg,gif|max:2048',
+        ]);
+
+        $user = $request->user();
+
+        if ($request->hasFile('avatar')) {
+            $path = $request->file('avatar')->store('avatars', 'public');
+            // Assuming you have storage linked, path will be like 'avatars/filename.jpg'
+            // To be accessible, it should be prepended with storage url, or frontend handles it
+            // Ideal: return full URL
+            $fullUrl = asset('storage/' . $path);
+            
+            $user->update(['avatar' => $fullUrl]);
+
+            return response()->json([
+                'message' => 'Avatar updated successfully',
+                'avatar' => $fullUrl
+            ]);
+        }
+
+        return response()->json(['message' => 'No file uploaded'], 400);
+    }
 }

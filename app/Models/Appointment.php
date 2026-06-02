@@ -17,6 +17,21 @@ class Appointment extends Model
         'reason',
         'notes',
         'meeting_link',
+        'amount',
+        'payment_status',
+        'payment_reference',
+        'earnings_distributed',
+        'duration',
+        'cancellation_reason',
+        'call_started_at',
+        'call_ended_at',
+        'call_status',
+    ];
+
+    protected $casts = [
+        'call_started_at' => 'datetime',
+        'call_ended_at' => 'datetime',
+        'appointment_date' => 'date',
     ];
 
     public function patient()
