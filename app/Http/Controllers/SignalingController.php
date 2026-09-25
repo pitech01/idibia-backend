@@ -13,10 +13,10 @@ class SignalingController extends Controller
      */
     public function join(Request $request)
     {
-        $appointmentId = $request->input('appointment_id') ?: $request->input('appointmentId');
-        $userId = $request->user() ? $request->user()->id : $request->input('userId');
+        $appointmentId = $request->input('appointment_id') ?: $request->input('appointmentId') ?: $request->query('appointment_id') ?: $request->query('appointmentId');
+        $userId = $request->user() ? $request->user()->id : ($request->input('userId') ?: $request->input('user_id') ?: $request->query('userId') ?: $request->query('user_id'));
         $role = $request->input('role', 'patient');
-        $receiverId = $request->input('receiverId') ?: $request->input('receiver_id');
+        $receiverId = $request->input('receiverId') ?: $request->input('receiver_id') ?: $request->query('receiverId') ?: $request->query('receiver_id');
 
         if (!$appointmentId || !$userId) {
             return response()->json(['status' => 'error', 'message' => 'Missing appointmentId or userId'], 400);
@@ -60,10 +60,10 @@ class SignalingController extends Controller
      */
     public function signal(Request $request)
     {
-        $appointmentId = $request->input('appointment_id') ?: $request->input('appointmentId');
-        $targetId = $request->input('target') ?: $request->input('receiverId');
+        $appointmentId = $request->input('appointment_id') ?: $request->input('appointmentId') ?: $request->query('appointment_id') ?: $request->query('appointmentId');
+        $targetId = $request->input('target') ?: $request->input('receiverId') ?: $request->input('receiver_id') ?: $request->query('target') ?: $request->query('receiverId') ?: $request->query('receiver_id');
         $signal = $request->input('signal');
-        $senderId = $request->user() ? $request->user()->id : $request->input('userId');
+        $senderId = $request->user() ? $request->user()->id : ($request->input('userId') ?: $request->input('user_id') ?: $request->query('userId') ?: $request->query('user_id'));
 
         if (!$appointmentId || !$targetId || !$signal) {
             return response()->json(['status' => 'error', 'message' => 'Missing signal parameters'], 400);
@@ -88,8 +88,8 @@ class SignalingController extends Controller
      */
     public function poll(Request $request)
     {
-        $appointmentId = $request->query('appointment_id') ?: $request->query('appointmentId');
-        $userId = $request->user() ? $request->user()->id : $request->query('userId');
+        $appointmentId = $request->input('appointment_id') ?: $request->input('appointmentId') ?: $request->query('appointment_id') ?: $request->query('appointmentId');
+        $userId = $request->user() ? $request->user()->id : ($request->input('userId') ?: $request->input('user_id') ?: $request->query('userId') ?: $request->query('user_id'));
 
         if (!$appointmentId || !$userId) {
             return response()->json(['status' => 'error', 'message' => 'Missing appointmentId or userId'], 400);
@@ -128,7 +128,7 @@ class SignalingController extends Controller
             'signals' => $signals,
             'ready' => $activeCount >= 2,
             'participants_count' => $activeCount,
-            'ended' => $ended
+            'ended' => (bool)$ended
         ]);
     }
 
@@ -137,7 +137,7 @@ class SignalingController extends Controller
      */
     public function checkIncoming(Request $request)
     {
-        $userId = $request->user() ? $request->user()->id : $request->query('userId');
+        $userId = $request->user() ? $request->user()->id : ($request->input('userId') ?: $request->input('user_id') ?: $request->query('userId') ?: $request->query('user_id'));
         if (!$userId) {
             return response()->json(['status' => 'error'], 400);
         }
@@ -156,7 +156,7 @@ class SignalingController extends Controller
      */
     public function end(Request $request)
     {
-        $appointmentId = $request->input('appointment_id') ?: $request->input('appointmentId');
+        $appointmentId = $request->input('appointment_id') ?: $request->input('appointmentId') ?: $request->query('appointment_id') ?: $request->query('appointmentId');
         if ($appointmentId) {
             $endedKey = "signaling_ended_{$appointmentId}";
             Cache::put($endedKey, true, now()->addMinutes(5));
