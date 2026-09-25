@@ -204,6 +204,12 @@ class AdminController extends Controller
                     'date' => $appt->appointment_date,
                     'time' => $appt->start_time,
                     'status' => $appt->status,
+                    'type' => $appt->type ?? 'video',
+                    'reason' => $appt->reason,
+                    'cancellation_reason' => $appt->cancellation_reason,
+                    'doctor_workplace' => $appt->doctor->doctor->workplace_name ?? null,
+                    'doctor_city' => $appt->doctor->doctor->city ?? null,
+                    'doctor_state' => $appt->doctor->doctor->state ?? null,
                     'duration' => $appt->duration ?? 30,
                     'payment_status' => $appt->payment_status,
                     'amount' => $appt->amount,
@@ -256,6 +262,98 @@ class AdminController extends Controller
         $user->update(['status' => 'active']);
         
         return response()->json(['message' => 'Patient account activated successfully']);
+    }
+
+    public function getDoctorDocument(Request $request, $id, $type)
+    {
+        $doctor = Doctor::find($id);
+        if (!$doctor) {
+            $doctor = Doctor::where('user_id', $id)->first();
+        }
+
+        if (!$doctor) {
+            abort(404, 'Doctor record not found');
+        }
+        
+        $path = match($type) {
+            'license', 'license_document', 'license_document_path' => $doctor->license_document_path,
+            'id', 'id_document', 'id_document_path' => $doctor->id_document_path,
+            default => null
+        };
+
+        if (!$path) {
+            abort(404, 'Document record not found');
+        }
+
+        return $this->streamFile($path);
+    }
+
+    public function getDocumentByPath(Request $request, $path)
+    {
+        // Sanitize path to prevent directory traversal
+        $cleanPath = str_replace('..', '', $path);
+        $cleanPath = ltrim($cleanPath, '/');
+        $cleanPath = preg_replace('/^public\//', '', $cleanPath);
+        $cleanPath = preg_replace('/^storage\//', '', $cleanPath);
+
+        return $this->streamFile($cleanPath);
+    }
+
+    private function streamFile($path)
+    {
+        // Strip any URL prefixes if stored as full URL
+        if (str_contains($path, '/storage/')) {
+            $path = substr($path, strpos($path, '/storage/') + 9);
+        }
+        $path = ltrim(preg_replace('/^public\//', '', $path), '/');
+        $baseName = basename($path);
+
+        $candidates = [
+            storage_path('app/public/' . $path),
+            storage_path('app/' . $path),
+            public_path('storage/' . $path),
+            storage_path('app/public/doctors/licenses/' . $baseName),
+            storage_path('app/public/doctors/ids/' . $baseName),
+            storage_path('app/public/doctors/' . $path),
+            storage_path('app/public/records/' . $baseName),
+            storage_path('app/records/' . $baseName),
+            storage_path('app/doctors/licenses/' . $baseName),
+            storage_path('app/doctors/ids/' . $baseName),
+            public_path('storage/doctors/licenses/' . $baseName),
+            public_path('storage/doctors/ids/' . $baseName),
+            public_path('storage/records/' . $baseName),
+        ];
+
+        $fullPath = null;
+        foreach ($candidates as $candidate) {
+            if (file_exists($candidate) && !is_dir($candidate)) {
+                $fullPath = $candidate;
+                break;
+            }
+        }
+
+        if (!$fullPath) {
+            $matches = glob(storage_path('app/public/doctors/*/' . $baseName));
+            if (!empty($matches) && file_exists($matches[0]) && !is_dir($matches[0])) {
+                $fullPath = $matches[0];
+            }
+        }
+
+        if (!$fullPath) {
+            abort(404, 'Document file not found on disk');
+        }
+
+        $mimeType = @mime_content_type($fullPath) ?: 'application/octet-stream';
+        $fileName = basename($fullPath);
+
+        return response()->file($fullPath, [
+            'Content-Type' => $mimeType,
+            'Content-Disposition' => 'inline; filename="' . $fileName . '"',
+            'Access-Control-Allow-Origin' => '*',
+            'Access-Control-Allow-Methods' => 'GET, OPTIONS',
+            'Access-Control-Allow-Headers' => '*',
+            'Cache-Control' => 'no-cache, private'
+        ]);
     }
 }
 

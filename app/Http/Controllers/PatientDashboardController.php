@@ -11,7 +11,7 @@ class PatientDashboardController extends Controller
         $user = $request->user();
 
         // 1. Upcoming Appointment
-        $upcomingAppointment = \App\Models\Appointment::with('doctor')
+        $upcomingAppointment = \App\Models\Appointment::with(['doctor.doctor'])
             ->where('patient_id', $user->id)
             ->where('status', 'not like', 'cancelled%')
             ->where('status', '!=', 'completed')

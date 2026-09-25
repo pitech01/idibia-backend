@@ -72,16 +72,23 @@ class DoctorController extends Controller
     {
         $user = $request->user();
         
+        // Clean up stale pending_payment older than 15 mins
+        Appointment::where('doctor_id', $user->id)
+            ->where('status', 'pending_payment')
+            ->where('created_at', '<', Carbon::now()->subMinutes(15))
+            ->update(['status' => 'cancelled']);
+
         // 1. Pending Requests (Count)
         $pendingRequests = Appointment::where('doctor_id', $user->id)
             ->whereIn('status', ['pending', 'pending_payment'])
+            ->where('created_at', '>=', Carbon::now()->subMinutes(15))
             ->count();
 
         // 2. Today's Appointments (Count)
         $today = Carbon::today()->toDateString();
         $todayAppointmentsCount = Appointment::where('doctor_id', $user->id)
             ->where('appointment_date', $today)
-            ->whereIn('status', ['confirmed', 'ongoing', 'completed', 'pending_payment'])
+            ->whereIn('status', ['confirmed', 'ongoing', 'completed'])
             ->count();
 
         // 3. Earnings (Sum 60% share from payments)
@@ -187,7 +194,49 @@ class DoctorController extends Controller
             ->pluck('patient_id')
             ->unique();
             
-        $patients = User::whereIn('id', $patientIds)->with('patient')->get();
+        $patients = User::whereIn('id', $patientIds)
+            ->with(['patient'])
+            ->get()
+            ->map(function ($patientUser) use ($user) {
+                $appointments = Appointment::where('doctor_id', $user->id)
+                    ->where('patient_id', $patientUser->id)
+                    ->orderBy('appointment_date', 'desc')
+                    ->orderBy('start_time', 'desc')
+                    ->get();
+
+                $latestAppt = $appointments->first();
+                $prescriptions = \App\Models\Prescription::where('doctor_id', $user->id)
+                    ->where('patient_id', $patientUser->id)
+                    ->with('items')
+                    ->latest()
+                    ->get();
+
+                $records = \App\Models\MedicalRecord::where('patient_id', $patientUser->id)
+                    ->where(function($q) use ($user) {
+                        $q->where('doctor_id', $user->id)->orWhereNull('doctor_id');
+                    })
+                    ->latest()
+                    ->get();
+
+                $hasUpcoming = $appointments->whereIn('status', ['confirmed', 'ongoing'])->count() > 0;
+                $status = $hasUpcoming ? 'Active' : ($appointments->where('status', 'completed')->count() > 0 ? 'Completed' : 'Active');
+
+                return [
+                    'id' => $patientUser->id,
+                    'name' => $patientUser->name,
+                    'email' => $patientUser->email,
+                    'phone' => $patientUser->phone,
+                    'avatar' => $patientUser->avatar,
+                    'patient' => $patientUser->patient,
+                    'appointments' => $appointments,
+                    'prescriptions' => $prescriptions,
+                    'records' => $records,
+                    'total_visits' => $appointments->count(),
+                    'last_visit' => $latestAppt ? $latestAppt->appointment_date->format('Y-m-d') : 'N/A',
+                    'latest_reason' => $latestAppt ? $latestAppt->reason : 'General Consultation',
+                    'status' => $status
+                ];
+            });
 
         return response()->json($patients);
     }
@@ -196,6 +245,12 @@ class DoctorController extends Controller
     {
         $user = $request->user();
         $date = $request->query('date', Carbon::today()->toDateString());
+
+        // Clean up stale pending_payment older than 15 mins
+        Appointment::where('doctor_id', $user->id)
+            ->where('status', 'pending_payment')
+            ->where('created_at', '<', Carbon::now()->subMinutes(15))
+            ->update(['status' => 'cancelled']);
 
         // Daily Appointments (for Timeline)
         $appointments = Appointment::with('patient')
@@ -209,7 +264,7 @@ class DoctorController extends Controller
         $now = Carbon::now();
         $upcoming = Appointment::with('patient')
             ->where('doctor_id', $user->id)
-            ->whereIn('status', ['confirmed', 'ongoing', 'pending_payment']) // Only confirmed/ongoing/pending for future
+            ->whereIn('status', ['confirmed', 'ongoing']) // Confirmed or ongoing for future list
             ->where(function($q) use ($now) {
                 $q->where('appointment_date', '>', $now->toDateString())
                   ->orWhere('appointment_date', $now->toDateString());
@@ -221,6 +276,7 @@ class DoctorController extends Controller
 
         $pendingCount = Appointment::where('doctor_id', $user->id)
             ->whereIn('status', ['pending', 'pending_payment'])
+            ->where('created_at', '>=', Carbon::now()->subMinutes(15))
             ->count();
 
         return response()->json([
@@ -330,6 +386,7 @@ class DoctorController extends Controller
                 'consultation_type' => $validated['consultation_type'],
                 'consultation_duration' => $validated['consultation_duration'] ?? $doctor->consultation_duration,
                 'workplace_name' => $validated['practice_name'] ?? $doctor->workplace_name,
+                'practice_address' => $validated['practice_address'] ?? $doctor->practice_address,
             ]);
         }
 

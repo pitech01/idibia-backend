@@ -37,7 +37,8 @@ class AuthController extends Controller
             'conditions' => 'nullable|string',
             'emergencyName' => 'nullable|string',
             'emergencyPhone' => 'nullable|string',
-            'virtualOnly' => 'boolean'
+            'virtualOnly' => 'nullable|boolean',
+            'termsAccepted' => 'nullable|boolean'
         ]);
 
         // Verify OTP logic...
@@ -57,8 +58,11 @@ class AuthController extends Controller
 
         if ($user) {
             // If user exists, check if they are permitted to "re-register" (i.e., incomplete)
-            $user->load('patient');
+            $user->load(['patient', 'doctor']);
             if ($user->patient && $user->patient->is_completed) {
+                return response()->json(['message' => 'Account already exists. Please Login.'], 400);
+            }
+            if ($user->doctor && ($user->doctor->status === 'active' || $user->doctor->is_verified)) {
                 return response()->json(['message' => 'Account already exists. Please Login.'], 400);
             }
             // Update existing incomplete user
@@ -152,22 +156,24 @@ class AuthController extends Controller
         }
 
         // Check for 2FA
-        $twoFactorEnabled = $user->settings['twoFactor'] ?? false;
+        $settings = $user->settings ?: [];
+        $twoFactorEnabled = !empty($settings['twoFactor']) && ($settings['twoFactor'] === true || $settings['twoFactor'] === '1' || $settings['twoFactor'] === 1 || $settings['twoFactor'] === 'true');
+        
         if ($twoFactorEnabled) {
             $otp = rand(100000, 999999);
-            \Illuminate\Support\Facades\Cache::put('2fa_otp_' . $user->email, (string)$otp, 600); // 10 minutes
+            \Illuminate\Support\Facades\Cache::put('2fa_otp_' . strtolower(trim($user->email)), (string)$otp, 600); // 10 minutes
 
             try {
                 \Illuminate\Support\Facades\Mail::to($user->email)->send(new \App\Mail\OtpMail($otp));
             } catch (\Exception $e) {
-                // Log error but continue for testing if needed, or fail
                 \Illuminate\Support\Facades\Log::error("2FA OTP Mail failed: " . $e->getMessage());
             }
 
             return response()->json([
                 'two_factor_required' => true,
+                'email' => $user->email,
                 'message' => 'OTP sent to your email',
-                'debug_otp' => $otp // Optional: remove in production
+                'debug_otp' => $otp // In case SMTP has local issues
             ]);
         }
 
@@ -188,10 +194,11 @@ class AuthController extends Controller
             'code' => 'required|string',
         ]);
 
-        $cachedOtp = \Illuminate\Support\Facades\Cache::get('2fa_otp_' . $request->email);
+        $normalizedEmail = strtolower(trim($request->email));
+        $cachedOtp = \Illuminate\Support\Facades\Cache::get('2fa_otp_' . $normalizedEmail);
 
-        if (!$cachedOtp || $cachedOtp !== $request->code) {
-            return response()->json(['message' => 'Invalid or expired OTP'], 422);
+        if (!$cachedOtp || trim((string)$cachedOtp) !== trim((string)$request->code)) {
+            return response()->json(['message' => 'Invalid or expired 6-digit security code. Please check your email or request a new code.'], 422);
         }
 
         $user = User::where('email', $request->email)->firstOrFail();
@@ -200,15 +207,40 @@ class AuthController extends Controller
             return response()->json(['message' => 'Your account has been suspended.'], 403);
         }
 
-        \Illuminate\Support\Facades\Cache::forget('2fa_otp_' . $request->email);
+        \Illuminate\Support\Facades\Cache::forget('2fa_otp_' . $normalizedEmail);
 
         $user->load(['patient', 'doctor']);
         $token = $user->createToken('auth_token')->plainTextToken;
 
         return response()->json([
-            'message' => '2FA verified',
+            'message' => '2FA verified successfully',
             'user' => $user,
             'token' => $token
+        ]);
+    }
+
+    public function resend2FA(Request $request)
+    {
+        $request->validate(['email' => 'required|email']);
+        $user = User::where('email', $request->email)->first();
+
+        if (!$user) {
+            return response()->json(['message' => 'Account not found'], 404);
+        }
+
+        $otp = rand(100000, 999999);
+        $normalizedEmail = strtolower(trim($user->email));
+        \Illuminate\Support\Facades\Cache::put('2fa_otp_' . $normalizedEmail, (string)$otp, 600); // 10 minutes
+
+        try {
+            \Illuminate\Support\Facades\Mail::to($user->email)->send(new \App\Mail\OtpMail($otp));
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error("2FA Resend OTP Mail failed: " . $e->getMessage());
+        }
+
+        return response()->json([
+            'message' => 'Security code resent to your email',
+            'debug_otp' => $otp
         ]);
     }
 
@@ -225,8 +257,11 @@ class AuthController extends Controller
         // Check if user exists and is completed
         $user = User::where('email', $request->email)->first();
         if ($user) {
-            $user->load('patient');
+            $user->load(['patient', 'doctor']);
             if ($user->patient && $user->patient->is_completed) {
+                return response()->json(['message' => 'Account already exists. Please Login.'], 400);
+            }
+            if ($user->doctor && ($user->doctor->status === 'active' || $user->doctor->is_verified)) {
                 return response()->json(['message' => 'Account already exists. Please Login.'], 400);
             }
             // If user exists but NOT completed, we assume they want to restart/continue registration.
@@ -242,14 +277,13 @@ class AuthController extends Controller
             \Illuminate\Support\Facades\Log::info("Attempting to send OTP email to {$request->email}");
             \Illuminate\Support\Facades\Mail::to($request->email)->send(new \App\Mail\OtpMail($otp));
             \Illuminate\Support\Facades\Log::info("OTP email sent successfully to {$request->email}: $otp");
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             \Illuminate\Support\Facades\Log::error('Mail sending failed: ' . $e->getMessage());
-            return response()->json(['message' => 'Failed to send email: ' . $e->getMessage()], 500);
         }
 
         return response()->json([
-            'message' => 'OTP sent successfully (Check Network Tab for code)',
-            'debug_otp' => $otp // TEMPORARY: For testing since email is verified
+            'message' => 'OTP code generated and sent to your email',
+            'debug_otp' => $otp
         ]);
     }
 

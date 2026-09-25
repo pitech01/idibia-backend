@@ -22,6 +22,7 @@ return [
     'allowed_origins' => [
         'http://localhost:5173',
         'http://127.0.0.1:5173', 
+        'https://idibia.ellisilimited.com',
         'https://idibia-frontend.vercel.app',
         'https://idibia.vercel.app',
         'https://autobot.atlascapitaledge.com',
@@ -29,7 +30,9 @@ return [
         'https://idibia-six.vercel.app'
     ],
 
-    'allowed_origins_patterns' => [],
+    'allowed_origins_patterns' => [
+        '#^https://idibia.*\.vercel\.app$#'
+    ],
 
     'allowed_headers' => ['*'],
 

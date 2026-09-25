@@ -11,9 +11,12 @@ Route::get('/ping', function () {
     return response()->json(['message' => 'Pong', 'status' => 'ok', 'timestamp' => now()]);
 });
 
+Route::get('/fix-cache', [App\Http\Controllers\MaintenanceController::class, 'fixCache']);
+
 Route::post('/register', [App\Http\Controllers\AuthController::class, 'register']);
 Route::post('/login', [App\Http\Controllers\AuthController::class, 'login']);
 Route::post('/2fa/verify', [App\Http\Controllers\AuthController::class, 'verify2FA']);
+Route::post('/2fa/resend', [App\Http\Controllers\AuthController::class, 'resend2FA']);
 Route::post('/forgot-password', [App\Http\Controllers\AuthController::class, 'forgotPassword']);
 Route::post('/reset-password', [App\Http\Controllers\AuthController::class, 'resetPassword']);
 Route::post('/otp/send', [App\Http\Controllers\AuthController::class, 'sendOtp']);
@@ -25,6 +28,21 @@ Route::post('/webhooks/paystack', [App\Http\Controllers\PaymentController::class
 Route::get('/posts', [App\Http\Controllers\PostController::class, 'index']);
 Route::get('/posts/{id}', [App\Http\Controllers\PostController::class, 'show']);
 Route::post('/subscribe', [App\Http\Controllers\SubscriberController::class, 'subscribe']);
+Route::get('/medical-records/{id}/file', [App\Http\Controllers\MedicalRecordController::class, 'getFile']);
+Route::get('/medical-records/file/{id}', [App\Http\Controllers\MedicalRecordController::class, 'getFile']);
+Route::get('/avatar/{filename}', [App\Http\Controllers\ProfileController::class, 'getAvatarFile']);
+Route::get('/user-avatar/{id}', [App\Http\Controllers\ProfileController::class, 'getUserAvatar']);
+Route::get('/doctors/{id}/document/{type}', [App\Http\Controllers\AdminController::class, 'getDoctorDocument']);
+Route::get('/admin/doctors/{id}/document/{type}', [App\Http\Controllers\AdminController::class, 'getDoctorDocument']);
+Route::get('/doctor-documents/{path}', [App\Http\Controllers\AdminController::class, 'getDocumentByPath'])->where('path', '.*');
+Route::get('/storage/{path}', [App\Http\Controllers\AdminController::class, 'getDocumentByPath'])->where('path', '.*');
+
+// WebRTC Signaling Fallback Routes (HTTP Long-Polling)
+Route::post('/signaling/join', [App\Http\Controllers\SignalingController::class, 'join']);
+Route::post('/signaling/signal', [App\Http\Controllers\SignalingController::class, 'signal']);
+Route::get('/signaling/poll', [App\Http\Controllers\SignalingController::class, 'poll']);
+Route::get('/signaling/check-incoming', [App\Http\Controllers\SignalingController::class, 'checkIncoming']);
+Route::post('/signaling/end', [App\Http\Controllers\SignalingController::class, 'end']);
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [App\Http\Controllers\AuthController::class, 'logout']);
@@ -50,6 +68,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/appointments/{id}/start-call', [App\Http\Controllers\AppointmentController::class, 'startCall']);
     Route::post('/appointments/{id}/end-call', [App\Http\Controllers\AppointmentController::class, 'endCall']);
     Route::post('/appointments/{id}/complete', [App\Http\Controllers\AppointmentController::class, 'complete']);
+    Route::post('/appointments/{id}/rate', [App\Http\Controllers\AppointmentController::class, 'rateDoctor']);
+
+    // Prescriptions Routes
+    Route::get('/prescriptions', [App\Http\Controllers\PrescriptionController::class, 'index']);
+    Route::post('/prescriptions', [App\Http\Controllers\PrescriptionController::class, 'store']);
+    Route::get('/prescriptions/{id}', [App\Http\Controllers\PrescriptionController::class, 'show']);
+    Route::post('/prescriptions/{id}/pay', [App\Http\Controllers\PrescriptionController::class, 'pay']);
 
     Route::get('/medical-records', [App\Http\Controllers\MedicalRecordController::class, 'index']);
     Route::post('/medical-records', [App\Http\Controllers\MedicalRecordController::class, 'store']);
@@ -61,6 +86,7 @@ Route::middleware('auth:sanctum')->group(function () {
     
     Route::get('/profile', [App\Http\Controllers\ProfileController::class, 'show']);
     Route::put('/profile', [App\Http\Controllers\ProfileController::class, 'update']);
+    Route::put('/profile/settings', [App\Http\Controllers\ProfileController::class, 'updateSettings']);
     Route::put('/profile/password', [App\Http\Controllers\ProfileController::class, 'updatePassword']);
     Route::post('/profile/avatar', [App\Http\Controllers\ProfileController::class, 'updateAvatar']);
 
@@ -80,9 +106,13 @@ Route::middleware('auth:sanctum')->group(function () {
     // Chat Routes
     Route::get('/chats', [App\Http\Controllers\ChatController::class, 'index']);
     Route::post('/chats/start', [App\Http\Controllers\ChatController::class, 'start']);
+    Route::post('/chats/start-direct', [App\Http\Controllers\ChatController::class, 'startDirect']);
     Route::get('/chats/{id}', [App\Http\Controllers\ChatController::class, 'show']);
     Route::post('/chats/{id}/send', [App\Http\Controllers\ChatController::class, 'sendMessage']);
     Route::put('/chats/{id}/read', [App\Http\Controllers\ChatController::class, 'markRead']);
+    Route::delete('/chats/{id}', [App\Http\Controllers\ChatController::class, 'destroy']);
+    Route::post('/chats/{id}/clear', [App\Http\Controllers\ChatController::class, 'clearMessages']);
+    Route::delete('/chats/{id}/messages/{messageId}', [App\Http\Controllers\ChatController::class, 'deleteMessage']);
 
     // Support Routes
     Route::get('/support', [App\Http\Controllers\SupportController::class, 'index']);

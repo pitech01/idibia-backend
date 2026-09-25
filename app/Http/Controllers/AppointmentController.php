@@ -14,7 +14,7 @@ class AppointmentController extends Controller
 
         $user = $request->user();
         if ($user->role === 'patient') {
-            $appointments = $user->appointments()->with('doctor.doctor')
+            $appointments = $user->appointments()->with(['doctor.doctor', 'prescription.items', 'rating'])
                 ->latest()
                 ->get()
                 ->map(function($appt) {
@@ -34,10 +34,12 @@ class AppointmentController extends Controller
                         'meeting_link' => $appt->meeting_link,
                         'reason' => $appt->reason,
                         'iso_start_time' => \Carbon\Carbon::parse($appt->appointment_date->format('Y-m-d') . ' ' . $appt->start_time)->toIso8601String(),
+                        'prescription' => $appt->prescription,
+                        'rating' => $appt->rating,
                     ];
                 });
         } else {
-             $appointments = \App\Models\Appointment::with(['patient'])
+             $appointments = \App\Models\Appointment::with(['patient', 'prescription.items', 'rating'])
                 ->where('doctor_id', $user->id)
                 ->orderBy('appointment_date', 'asc')
                 ->orderBy('start_time', 'asc')
@@ -59,6 +61,8 @@ class AppointmentController extends Controller
                         'meeting_link' => $appt->meeting_link,
                         'reason' => $appt->reason,
                         'iso_start_time' => \Carbon\Carbon::parse($appt->appointment_date->format('Y-m-d') . ' ' . $appt->start_time)->toIso8601String(),
+                        'prescription' => $appt->prescription,
+                        'rating' => $appt->rating,
                     ];
                 });
         }
@@ -104,6 +108,12 @@ class AppointmentController extends Controller
         }
 
         $serverNow = \Carbon\Carbon::now();
+
+        // 🔒 Auto-clean stale pending_payment locks older than 15 mins for this doctor
+        \App\Models\Appointment::where('doctor_id', $id)
+            ->where('status', 'pending_payment')
+            ->where('created_at', '<', $serverNow->copy()->subMinutes(15))
+            ->update(['status' => 'cancelled']);
 
         // Get existing appointments to check overlaps
         $bookedAppointments = \App\Models\Appointment::where('doctor_id', $id)
@@ -218,7 +228,7 @@ class AppointmentController extends Controller
             'appointment_date' => 'required|date',
             'start_time' => 'required', // HH:mm format
             'reason' => 'nullable|string',
-            'type' => 'required|in:video,in-person'
+            'type' => 'required|in:video,in-person,virtual,physical'
         ]);
 
         $doctorUser = \App\Models\User::with('doctor')->findOrFail($request->doctor_id);
@@ -226,6 +236,17 @@ class AppointmentController extends Controller
         // 🔒 CRITICAL: Only allow bookings for ACTIVE doctors
         if (!$doctorUser->doctor || $doctorUser->status !== 'active' || $doctorUser->doctor->status !== 'active') {
              return response()->json(['message' => 'This doctor is currently unavailable for new bookings.'], 403);
+        }
+
+        // Normalize consultation type: 'in-person' | 'video'
+        $normalizedType = in_array($request->type, ['in-person', 'physical']) ? 'in-person' : 'video';
+        $docConsultationType = $doctorUser->doctor->consultation_type ?? 'both';
+
+        if ($docConsultationType === 'virtual' && $normalizedType === 'in-person') {
+            return response()->json(['message' => 'This doctor only offers virtual (video) consultations.'], 422);
+        }
+        if ($docConsultationType === 'physical' && $normalizedType === 'video') {
+            return response()->json(['message' => 'This doctor only offers in-person (physical) consultations.'], 422);
         }
 
         // Settings
@@ -268,11 +289,17 @@ class AppointmentController extends Controller
              return response()->json(['message' => 'Bookings must be made at least 30 minutes in advance.'], 422);
         }
 
+        // 🔒 Auto-clean stale pending_payment locks older than 15 mins for this doctor
+        \App\Models\Appointment::where('doctor_id', $request->doctor_id)
+            ->where('status', 'pending_payment')
+            ->where('created_at', '<', $serverNow->copy()->subMinutes(15))
+            ->update(['status' => 'cancelled']);
+
         // 3. Double Booking / Overlap / Lock Check
         // Use Transaction & LockForUpdate for Race Condition Protection
         \Illuminate\Support\Facades\DB::beginTransaction();
         try {
-            // Check for ANY overlap with non-cancelled appointments
+            // Check for ANY overlap with active / locked appointments
             $exists = \App\Models\Appointment::where('doctor_id', $request->doctor_id)
                 ->where('appointment_date', $date)
                 ->whereIn('status', ['pending_payment', 'confirmed', 'ongoing']) // Check locked slots too
@@ -288,7 +315,13 @@ class AppointmentController extends Controller
                 return response()->json(['message' => 'This slot has already been taken. Please choose another time.'], 422);
             }
 
-            // Create Locked Appointment
+            // Free Virtual Consultation Policy (Trial Period)
+            $isVirtual = ($normalizedType === 'video');
+            $amount = $isVirtual ? 0.00 : (float) ($doctorUser->doctor->consultation_fee ?? 0);
+            $paymentStatus = $isVirtual ? 'free_trial' : 'unpaid';
+            $appointmentStatus = $isVirtual ? 'confirmed' : 'pending_payment';
+
+            // Create Appointment
             $appointment = \App\Models\Appointment::create([
                 'patient_id' => $request->user()->id,
                 'doctor_id' => $request->doctor_id,
@@ -296,11 +329,11 @@ class AppointmentController extends Controller
                 'start_time' => $slotStart->format('H:i:s'),
                 'end_time' => $slotEnd->format('H:i:s'),
                 'duration' => $consultationDuration,
-                'status' => 'pending_payment', // 🔒 SLOT LOCKED
-                'type' => $request->type,
+                'status' => $appointmentStatus,
+                'type' => $normalizedType,
                 'reason' => $request->reason,
-                'amount' => $doctorUser->doctor->consultation_fee ?? 0,
-                'payment_status' => 'unpaid',
+                'amount' => $amount,
+                'payment_status' => $paymentStatus,
                 'meeting_link' => null,
             ]);
 
@@ -312,13 +345,13 @@ class AppointmentController extends Controller
                 [
                     'patient_id' => $appointment->patient_id,
                     'doctor_id' => $appointment->doctor_id,
-                    'status' => 'pending'
+                    'status' => 'active'
                 ]
             );
 
             return response()->json([
-                'message' => 'Appointment reserved successfully',
-                'appointment' => $appointment
+                'message' => $isVirtual ? 'Virtual consultation booked successfully (Free Trial)' : 'Appointment reserved successfully',
+                'appointment' => $appointment->load('doctor.doctor')
             ]);
 
         } catch (\Exception $e) {
@@ -465,37 +498,207 @@ class AppointmentController extends Controller
 
     private function ensureSignalingIsRunning()
     {
-        // Simple check: Try to connect to port from .env
-        $port = env('SIGNALING_PORT', 3000);
-        $connection = @fsockopen('127.0.0.1', $port, $errno, $errstr, 0.5);
-        
-        if (!is_resource($connection)) {
-            // Not running! Fire the artisan command to start it in the background
-            \Artisan::call('signaling:start');
-        } else {
-            fclose($connection);
+        try {
+            // Simple check: Try to connect to port from .env
+            $port = env('SIGNALING_PORT', 3000);
+            $connection = @fsockopen('127.0.0.1', $port, $errno, $errstr, 0.2);
+            
+            if (!is_resource($connection)) {
+                // Not running! Fire the artisan command to start it in the background if in console or supported
+                if (function_exists('exec') || function_exists('popen')) {
+                    \Artisan::call('signaling:start');
+                }
+            } else {
+                fclose($connection);
+            }
+        } catch (\Throwable $e) {
+            \Log::warning("Could not auto-start signaling server: " . $e->getMessage());
         }
     }
 
     public function complete(Request $request, $id)
     {
-        $appointment = \App\Models\Appointment::findOrFail($id);
+        $appointment = \App\Models\Appointment::with(['doctor.doctor', 'patient'])->findOrFail($id);
+        $doctorUser = $request->user();
 
-        if ((int) $request->user()->id !== (int) $appointment->doctor_id) {
-            return response()->json(['message' => 'Unauthorized'], 403);
+        if ((int) $doctorUser->id !== (int) $appointment->doctor_id) {
+            return response()->json(['message' => 'Unauthorized. Only the assigned doctor can document and complete this consultation.'], 403);
         }
 
-        if ($appointment->status !== 'ongoing') {
-            return response()->json(['message' => 'Appointment must be ongoing to complete'], 400);
+        if (!in_array($appointment->status, ['ongoing', 'confirmed', 'scheduled'])) {
+            return response()->json(['message' => 'Appointment must be active or ongoing to complete'], 400);
         }
 
         \Illuminate\Support\Facades\DB::beginTransaction();
         try {
-            $appointment->update(['status' => 'completed']);
+            $appointment->update([
+                'status' => 'completed',
+                'call_status' => 'ended',
+                'call_ended_at' => $appointment->call_ended_at ?? now(),
+            ]);
+
+            $diagnosis = $request->input('diagnosis') ?: ($appointment->reason ?: 'General Clinical Consultation');
+            $clinicalNotes = $request->input('clinical_notes') ?: $request->input('soap_notes');
+            $chiefComplaint = $request->input('chief_complaint') ?: $appointment->reason;
+            $treatmentPlan = $request->input('treatment_plan');
+            $followUp = $request->input('follow_up') ?: $request->input('follow_up_advice');
+            $vitals = $request->input('vitals', []);
+
+            // 1. Standardized Clinical Encounter Summary
+            $formattedDescription = [];
+            if ($chiefComplaint) {
+                $formattedDescription[] = "• Chief Complaint / Symptoms: " . $chiefComplaint;
+            }
+            if ($diagnosis) {
+                $formattedDescription[] = "• Clinical Diagnosis / Assessment: " . $diagnosis;
+            }
+            if (!empty($vitals) && is_array($vitals)) {
+                $vitalSummary = [];
+                if (!empty($vitals['bp'])) $vitalSummary[] = "BP: " . $vitals['bp'];
+                if (!empty($vitals['pulse'])) $vitalSummary[] = "Pulse: " . $vitals['pulse'] . " bpm";
+                if (!empty($vitals['temp'])) $vitalSummary[] = "Temp: " . $vitals['temp'] . " °C";
+                if (!empty($vitals['spo2'])) $vitalSummary[] = "SpO2: " . $vitals['spo2'] . "%";
+                if (!empty($vitals['weight'])) $vitalSummary[] = "Weight: " . $vitals['weight'] . " kg";
+                if (!empty($vitalSummary)) {
+                    $formattedDescription[] = "• Recorded Vitals: " . implode(', ', $vitalSummary);
+                }
+            }
+            if ($clinicalNotes) {
+                $formattedDescription[] = "• Clinical Notes & Observations:\n" . $clinicalNotes;
+            }
+            if ($treatmentPlan) {
+                $formattedDescription[] = "• Treatment Plan & Patient Advice:\n" . $treatmentPlan;
+            }
+            if ($followUp) {
+                $formattedDescription[] = "• Follow-up Recommendation: " . $followUp;
+            }
+
+            $finalSummaryText = implode("\n\n", $formattedDescription);
+            $facilityName = ($doctorUser->doctor && $doctorUser->doctor->workplace_name) ? $doctorUser->doctor->workplace_name : 'Idibia Health Network';
+
+            // 2. Automatically Create Consultation Note in Medical Records
+            \App\Models\MedicalRecord::create([
+                'patient_id' => $appointment->patient_id,
+                'doctor_id' => $doctorUser->id,
+                'type' => 'Consultation Note',
+                'title' => 'Clinical Encounter: ' . $diagnosis,
+                'doctor_name' => 'Dr. ' . $doctorUser->name,
+                'record_date' => now()->toDateString(),
+                'status' => 'Completed',
+                'facility' => $facilityName,
+                'description' => $finalSummaryText ?: ('Consultation encounter completed with Dr. ' . $doctorUser->name . '. Diagnosis: ' . $diagnosis),
+            ]);
+
+            // 3. Process E-Prescription Items if provided
+            $prescriptionItems = $request->input('prescription_items', []);
+            if (!empty($prescriptionItems) && is_array($prescriptionItems)) {
+                $validItems = array_filter($prescriptionItems, function($i) {
+                    return !empty($i['medication_name']);
+                });
+
+                if (!empty($validItems)) {
+                    $prescriptionNumber = 'RX-' . strtoupper(date('ymd')) . '-' . strtoupper(\Illuminate\Support\Str::random(5));
+                    $totalAmount = 0.00;
+                    foreach ($validItems as $v) {
+                        $qty = (int) ($v['quantity'] ?? 1);
+                        $unitPrice = (float) ($v['unit_price'] ?? 0.00);
+                        $totalAmount += ($qty * $unitPrice);
+                    }
+
+                    $prescription = \App\Models\Prescription::create([
+                        'prescription_number' => $prescriptionNumber,
+                        'patient_id' => $appointment->patient_id,
+                        'doctor_id' => $doctorUser->id,
+                        'appointment_id' => $appointment->id,
+                        'diagnosis' => $diagnosis,
+                        'clinical_notes' => $clinicalNotes ?? $treatmentPlan,
+                        'total_amount' => $totalAmount,
+                        'payment_status' => $totalAmount > 0 ? 'unpaid' : 'paid',
+                        'status' => 'issued',
+                        'paid_at' => $totalAmount > 0 ? null : now(),
+                    ]);
+
+                    foreach ($validItems as $item) {
+                        $qty = (int) ($item['quantity'] ?? 1);
+                        $unitPrice = (float) ($item['unit_price'] ?? 0.00);
+                        $prescription->items()->create([
+                            'medication_name' => $item['medication_name'],
+                            'dosage_form' => $item['dosage_form'] ?? 'Tablet',
+                            'strength' => $item['strength'] ?? null,
+                            'frequency' => $item['frequency'] ?? 'As directed',
+                            'duration' => $item['duration'] ?? '5 days',
+                            'instructions' => $item['instructions'] ?? null,
+                            'quantity' => $qty,
+                            'unit_price' => $unitPrice,
+                            'total_price' => $qty * $unitPrice,
+                        ]);
+                    }
+
+                    \App\Models\MedicalRecord::create([
+                        'patient_id' => $appointment->patient_id,
+                        'doctor_id' => $doctorUser->id,
+                        'type' => 'Prescription',
+                        'title' => 'E-Prescription (℞): ' . $diagnosis,
+                        'doctor_name' => 'Dr. ' . $doctorUser->name,
+                        'record_date' => now()->toDateString(),
+                        'status' => 'Active',
+                        'facility' => $facilityName,
+                        'description' => 'Prescription #' . $prescriptionNumber . ' issued with ' . count($validItems) . ' medication(s).',
+                    ]);
+                }
+            }
+
+            // 4. Process Diagnostic / Lab Orders if provided
+            $labOrders = $request->input('lab_orders', []);
+            if (!empty($labOrders) && is_array($labOrders)) {
+                foreach ($labOrders as $test) {
+                    $testName = is_array($test) ? ($test['test_name'] ?? $test['name'] ?? 'Diagnostic Test') : (string) $test;
+                    if (!empty(trim($testName))) {
+                        \App\Models\MedicalRecord::create([
+                            'patient_id' => $appointment->patient_id,
+                            'doctor_id' => $doctorUser->id,
+                            'type' => 'Lab Result',
+                            'title' => 'Diagnostic Order: ' . trim($testName),
+                            'doctor_name' => 'Dr. ' . $doctorUser->name,
+                            'record_date' => now()->toDateString(),
+                            'status' => 'Ordered',
+                            'facility' => $facilityName,
+                            'description' => 'Clinical laboratory investigation ordered by Dr. ' . $doctorUser->name . ' for diagnosis: ' . $diagnosis,
+                        ]);
+                    }
+                }
+            }
+
+            // 5. Send Database Notification to Patient
+            try {
+                \Illuminate\Support\Facades\DB::table('notifications')->insert([
+                    'id' => (string) \Illuminate\Support\Str::uuid(),
+                    'type' => 'App\Notifications\ConsultationCompleted',
+                    'notifiable_type' => 'App\Models\User',
+                    'notifiable_id' => $appointment->patient_id,
+                    'data' => json_encode([
+                        'title' => 'Consultation Summary & Prescription Ready',
+                        'message' => 'Dr. ' . $doctorUser->name . ' has documented your consultation summary and issued your clinical notes/e-prescriptions in your Medical Records.',
+                        'appointment_id' => $appointment->id,
+                        'type' => 'medical_record',
+                    ]),
+                    'read_at' => null,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            } catch (\Throwable $notifEx) {
+                \Illuminate\Support\Facades\Log::warning('Failed to insert consultation notification: ' . $notifEx->getMessage());
+            }
+
+            // 6. Distribute earnings
             $this->distributeEarnings($appointment);
 
             \Illuminate\Support\Facades\DB::commit();
-            return response()->json(['message' => 'Consultation completed and earnings distributed', 'appointment' => $appointment]);
+
+            return response()->json([
+                'message' => 'Consultation encounter completed, clinical summary saved, and patient chart updated successfully.',
+                'appointment' => $appointment->fresh(['doctor.doctor', 'prescription.items', 'patient'])
+            ]);
         } catch (\Exception $e) {
             \Illuminate\Support\Facades\DB::rollBack();
             return response()->json(['message' => 'Failed to complete appointment: ' . $e->getMessage()], 500);
@@ -562,8 +765,12 @@ class AppointmentController extends Controller
         $appointment = \App\Models\Appointment::findOrFail($id);
         
         // Authorization check
-        $userId = $request->user()->id;
-        if ((int) $userId !== (int) $appointment->patient_id && (int) $userId !== (int) $appointment->doctor_id) {
+        $user = $request->user();
+        $userId = $user->id;
+        $userRole = $user->role;
+        $isAdmin = in_array($userRole, ['admin', 'super-admin']);
+
+        if ((int) $userId !== (int) $appointment->patient_id && (int) $userId !== (int) $appointment->doctor_id && !$isAdmin) {
             return response()->json([
                 'message' => 'Unauthorized cancellation attempt',
                 'debug' => [
@@ -574,23 +781,25 @@ class AppointmentController extends Controller
             ], 403);
         }
 
-        // Only allow cancellation if status is pending_payment or confirmed
-        if (!in_array($appointment->status, ['pending_payment', 'confirmed'])) {
+        // Only allow cancellation if status is pending, pending_payment, confirmed, or scheduled
+        if (!in_array($appointment->status, ['pending', 'pending_payment', 'confirmed', 'scheduled'])) {
             return response()->json(['message' => 'Appointment cannot be cancelled in its current status.'], 400);
         }
 
         \Illuminate\Support\Facades\DB::beginTransaction();
         try {
             $status = 'cancelled';
-            if ($request->user()->role === 'patient') {
+            if ($userRole === 'patient') {
                 $status = 'cancelled_by_patient';
-            } elseif ($request->user()->role === 'doctor') {
+            } elseif ($userRole === 'doctor') {
                 $status = 'cancelled_by_doctor';
+            } elseif ($isAdmin) {
+                $status = 'cancelled_by_admin';
             }
 
             $appointment->update([
                 'status' => $status,
-                'cancellation_reason' => $request->reason
+                'cancellation_reason' => $request->reason ?? ($isAdmin ? 'Cancelled by Administrator' : null)
             ]);
 
             // Refund logic if paid
@@ -670,5 +879,53 @@ class AppointmentController extends Controller
             \Illuminate\Support\Facades\DB::rollBack();
             return response()->json(['message' => 'Failed to cancel appointment: ' . $e->getMessage()], 500);
         }
+    }
+
+    /**
+     * Rate and review doctor after consultation.
+     */
+    public function rateDoctor(Request $request, $id)
+    {
+        $user = $request->user();
+        $appointment = \App\Models\Appointment::with('doctor.doctor')->findOrFail($id);
+
+        if ((int) $appointment->patient_id !== (int) $user->id) {
+            return response()->json(['message' => 'Unauthorized to rate this consultation.'], 403);
+        }
+
+        $validated = $request->validate([
+            'rating' => 'required|integer|min:1|max:5',
+            'comment' => 'nullable|string|max:1000',
+            'tags' => 'nullable|array',
+        ]);
+
+        $rating = \App\Models\DoctorRating::updateOrCreate(
+            ['appointment_id' => $appointment->id],
+            [
+                'patient_id' => $user->id,
+                'doctor_id' => $appointment->doctor_id,
+                'rating' => $validated['rating'],
+                'comment' => $validated['comment'] ?? null,
+                'tags' => $validated['tags'] ?? [],
+            ]
+        );
+
+        // Recalculate Doctor's aggregate rating
+        $doctorUser = $appointment->doctor;
+        if ($doctorUser && $doctorUser->doctor) {
+            $avgRating = \App\Models\DoctorRating::where('doctor_id', $doctorUser->id)->avg('rating');
+            $reviewsCount = \App\Models\DoctorRating::where('doctor_id', $doctorUser->id)->count();
+
+            $doctorUser->doctor->update([
+                'rating' => round($avgRating ?? 5.0, 2),
+                'reviews_count' => $reviewsCount,
+            ]);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Thank you for your rating and feedback!',
+            'rating' => $rating,
+        ]);
     }
 }

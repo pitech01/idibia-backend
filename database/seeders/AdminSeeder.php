@@ -22,7 +22,9 @@ class AdminSeeder extends Seeder
                 'role' => 'admin',
                 'email_verified_at' => now(),
             ]);
-            $this->command->info('Admin 1: admin@dibia.com / password');
+            $this->command?->info('Admin 1 created: admin@dibia.com / password');
+        } else {
+            $this->command?->info('Admin 1 (admin@dibia.com) already exists. Skipped to protect existing data.');
         }
 
         // Create Second Admin
@@ -34,7 +36,9 @@ class AdminSeeder extends Seeder
                 'role' => 'admin',
                 'email_verified_at' => now(),
             ]);
-            $this->command->info('Admin 2: staff@dibia.com / password');
+            $this->command?->info('Admin 2 created: staff@dibia.com / password');
+        } else {
+            $this->command?->info('Admin 2 (staff@dibia.com) already exists. Skipped to protect existing data.');
         }
 
         // Create Super Admin
@@ -46,7 +50,9 @@ class AdminSeeder extends Seeder
                 'role' => 'super-admin',
                 'email_verified_at' => now(),
             ]);
-            $this->command->info('Super Admin: superadmin@dibia.com / password');
+            $this->command?->info('Super Admin created: superadmin@dibia.com / password');
+        } else {
+            $this->command?->info('Super Admin (superadmin@dibia.com) already exists. Skipped to protect existing data.');
         }
     }
 }

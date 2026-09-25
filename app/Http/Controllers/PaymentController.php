@@ -482,8 +482,7 @@ class PaymentController extends Controller
 
     private function broadcastToSignaling($event, $data)
     {
-        $port = env('SIGNALING_PORT', 3000);
-        $url = "http://localhost:{$port}/broadcast";
+        $url = config('services.signaling.url', 'http://127.0.0.1:3000') . '/broadcast';
         
         try {
             \Illuminate\Support\Facades\Http::timeout(2)
@@ -493,7 +492,7 @@ class PaymentController extends Controller
                     'data' => $data
                 ]);
         } catch (\Exception $e) {
-            \Illuminate\Support\Facades\Log::error("Signaling broadcast failed: " . $e->getMessage());
+            \Illuminate\Support\Facades\Log::warning("Signaling payment broadcast failed: " . $e->getMessage());
         }
     }
 }

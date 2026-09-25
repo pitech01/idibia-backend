@@ -28,11 +28,19 @@ class AppServiceProvider extends ServiceProvider
         if ($this->app->runningInConsole()) {
             Event::listen(CommandStarting::class, function (CommandStarting $event) {
                 if ($event->command === 'serve') {
-                    // Use a detached process to start signaling server so it doesn't block boot
-                    if (strncasecmp(PHP_OS, 'WIN', 3) === 0) {
-                        pclose(popen("start /B php artisan signaling:start > NUL 2>&1", "r"));
-                    } else {
-                        exec("php artisan signaling:start > /dev/null 2>&1 &");
+                    try {
+                        if (strncasecmp(PHP_OS, 'WIN', 3) === 0) {
+                            if (function_exists('popen') && function_exists('pclose')) {
+                                $h = @popen("start /B php artisan signaling:start > NUL 2>&1", "r");
+                                if ($h) pclose($h);
+                            }
+                        } else {
+                            if (function_exists('exec')) {
+                                @\exec("php artisan signaling:start > /dev/null 2>&1 &");
+                            }
+                        }
+                    } catch (\Throwable $e) {
+                        // ignore
                     }
                     
                     if ($event->output) {

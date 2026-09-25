@@ -34,7 +34,10 @@ class MedicalRecord extends Model
     public function getFileUrlAttribute()
     {
         if ($this->file_path) {
-            return asset('storage/' . $this->file_path);
+            if (str_starts_with($this->file_path, 'http://') || str_starts_with($this->file_path, 'https://')) {
+                return $this->file_path;
+            }
+            return url('/api/medical-records/' . $this->id . '/file');
         }
         return null;
     }

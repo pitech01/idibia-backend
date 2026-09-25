@@ -54,6 +54,21 @@ class User extends Authenticatable implements MustVerifyEmail
         return $this->hasMany(CreditTransaction::class);
     }
 
+    public function prescriptions()
+    {
+        return $this->hasMany(Prescription::class, 'patient_id');
+    }
+
+    public function doctorPrescriptions()
+    {
+        return $this->hasMany(Prescription::class, 'doctor_id');
+    }
+
+    public function doctorRatings()
+    {
+        return $this->hasMany(DoctorRating::class, 'doctor_id');
+    }
+
     /**
      * The attributes that are mass assignable.
      *

@@ -5,6 +5,16 @@
 
     RewriteEngine On
 
+    # 1. Signaling Server Proxy (WebSocket Upgrade)
+    RewriteCond %{HTTP:Upgrade} websocket [NC]
+    RewriteCond %{HTTP:Connection} upgrade [NC]
+    RewriteRule ^(.*)           ws://127.0.0.1:3000/$1 [P,QSA,L]
+
+    # 2. Signaling Server Proxy (Socket.io Polling & Broadcast)
+    RewriteCond %{REQUEST_URI}  ^/socket\.io [NC,OR]
+    RewriteCond %{REQUEST_URI}  ^/broadcast [NC]
+    RewriteRule ^(.*)           http://127.0.0.1:3000/$1 [P,QSA,L]
+
     # Handle Authorization Header
     RewriteCond %{HTTP:Authorization} .
     RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]

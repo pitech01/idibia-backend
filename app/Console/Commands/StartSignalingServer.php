@@ -68,8 +68,8 @@ class StartSignalingServer extends Command
 
     private function isAlreadyRunning(): bool
     {
-        // Simple check: Try to connect to port 3000
-        $connection = @fsockopen('127.0.0.1', 3000, $errno, $errstr, 0.5);
+        $port = (int) env('SIGNALING_PORT', 3000);
+        $connection = @fsockopen('127.0.0.1', $port, $errno, $errstr, 0.5);
         if (is_resource($connection)) {
             fclose($connection);
             return true;
@@ -79,17 +79,78 @@ class StartSignalingServer extends Command
 
     private function findNodePath(): ?string
     {
-        // Check for common node locations or use 'node' if in path
+        if (strncasecmp(PHP_OS, 'WIN', 3) === 0) {
+            return 'node';
+        }
+
+        $candidates = [
+            '/usr/local/bin/node',
+            '/usr/bin/node',
+            '/bin/node',
+            '/opt/cpanel/ea-nodejs20/bin/node',
+            '/opt/cpanel/ea-nodejs18/bin/node',
+            '/opt/cpanel/ea-nodejs16/bin/node',
+            '/opt/alt/alt-nodejs20/root/usr/bin/node',
+            '/opt/alt/alt-nodejs18/root/usr/bin/node',
+            '/home/ellisili/.nvm/versions/node/v20.*/bin/node',
+            '/home/ellisili/.nvm/versions/node/v18.*/bin/node',
+            '/home/ellisili/.nvm/versions/node/v16.*/bin/node',
+            '/root/.nvm/versions/node/v20.*/bin/node',
+            '/root/.nvm/versions/node/v18.*/bin/node'
+        ];
+
+        foreach ($candidates as $candidate) {
+            if (str_contains($candidate, '*')) {
+                $globbed = glob($candidate);
+                if (!empty($globbed) && is_executable($globbed[0])) {
+                    return $globbed[0];
+                }
+            } elseif (file_exists($candidate) && is_executable($candidate)) {
+                return $candidate;
+            }
+        }
+
+        if (function_exists('shell_exec')) {
+            $which = trim(@shell_exec('which node 2>/dev/null') ?: '');
+            if ($which && file_exists($which) && is_executable($which)) {
+                return $which;
+            }
+        }
+
         return 'node';
     }
 
     private function startBackgroundWindows($node, $script)
     {
-        pclose(popen("start /B {$node} \"{$script}\" > NUL 2>&1", "r"));
+        if (function_exists('popen') && function_exists('pclose')) {
+            try {
+                $handle = @popen("start /B {$node} \"{$script}\" > NUL 2>&1", "r");
+                if ($handle) {
+                    pclose($handle);
+                }
+            } catch (\Throwable $e) {
+                $this->warn('Could not spawn background process on Windows: ' . $e->getMessage());
+            }
+        }
     }
 
     private function startBackgroundLinux($node, $script)
     {
-        exec("nohup {$node} \"{$script}\" > /dev/null 2>&1 &");
+        $logFile = storage_path('logs/signaling.log');
+        $cmd = "nohup {$node} \"{$script}\" > \"{$logFile}\" 2>&1 &";
+        
+        if (function_exists('exec')) {
+            try {
+                @\exec($cmd);
+            } catch (\Throwable $e) {
+                $this->warn('Could not spawn background process on Linux: ' . $e->getMessage());
+            }
+        } elseif (function_exists('shell_exec')) {
+            try {
+                @\shell_exec($cmd);
+            } catch (\Throwable $e) {
+                $this->warn('Could not spawn background process on Linux: ' . $e->getMessage());
+            }
+        }
     }
 }

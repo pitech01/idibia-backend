@@ -82,8 +82,19 @@ class PostSeeder extends Seeder
             ],
         ];
 
+        $createdCount = 0;
+        $skippedCount = 0;
+
         foreach ($posts as $post) {
-            \App\Models\Post::create($post);
+            $existing = \App\Models\Post::where('slug', $post['slug'])->first();
+            if (!$existing) {
+                \App\Models\Post::create($post);
+                $createdCount++;
+            } else {
+                $skippedCount++;
+            }
         }
+
+        $this->command?->info("Posts seeded: {$createdCount} created, {$skippedCount} skipped (already present).");
     }
 }
