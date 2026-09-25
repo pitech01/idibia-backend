@@ -36,10 +36,17 @@ io.on('connection', (socket) => {
 
     // Join a personal room for targeted notifications
     const userId = socket.handshake.query.userId;
+    const appointmentId = socket.handshake.query.appointmentId;
     if (userId) {
         console.log(`User ${userId} joined their personal room`);
         socket.join(`user_${userId}`);
     }
+    if (appointmentId) {
+        console.log(`Socket joined appointment_${appointmentId} via handshake query`);
+        socket.join(`appointment_${appointmentId}`);
+        socket.currentRoom = `appointment_${appointmentId}`;
+    }
+
 
     socket.on('call:start', (data) => {
         const appointment_id = data.appointment_id || data.appointmentId;

@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
+use App\Models\Appointment;
 
 class SignalingController extends Controller
 {
@@ -22,6 +23,12 @@ class SignalingController extends Controller
             return response()->json(['status' => 'error', 'message' => 'Missing appointmentId or userId'], 400);
         }
 
+        $userId = (int)$userId;
+        $appointmentId = (int)$appointmentId;
+
+        // Reset ended state on new join
+        Cache::forget("signaling_ended_{$appointmentId}");
+
         $roomKey = "signaling_room_{$appointmentId}";
         $participants = Cache::get($roomKey, []);
 
@@ -29,20 +36,34 @@ class SignalingController extends Controller
             'user_id' => $userId,
             'role' => $role,
             'joined_at' => now()->timestamp,
-            'last_seen' => now()->timestamp
+            'last_seen' => microtime(true)
         ];
 
         Cache::put($roomKey, $participants, now()->addMinutes(30));
 
-        // If target receiver exists, alert receiver personal queue
-        if ($receiverId) {
-            $alertKey = "signaling_incoming_{$receiverId}";
+        // Resolve doctor & patient from Appointment model if available
+        $patientUserId = null;
+        $doctorUserId = null;
+        try {
+            $appointment = Appointment::find($appointmentId);
+            if ($appointment) {
+                $patientUserId = (int)$appointment->patient_id;
+                $doctorUserId = (int)$appointment->doctor_id;
+            }
+        } catch (\Exception $e) {
+            // Fallback silently if db query fails
+        }
+
+        // If receiverId passed or resolved, alert receiver personal incoming queue
+        $targetAlertId = $receiverId ?: ($userId === $doctorUserId ? $patientUserId : $doctorUserId);
+        if ($targetAlertId && (int)$targetAlertId !== $userId) {
+            $alertKey = "signaling_incoming_{$targetAlertId}";
             Cache::put($alertKey, [
                 'appointment_id' => $appointmentId,
                 'sender_id' => $userId,
                 'doctor_name' => $request->input('doctor_name', 'Doctor'),
                 'time' => now()->timestamp
-            ], now()->addMinutes(2));
+            ], now()->addMinutes(3));
         }
 
         $isReady = count($participants) >= 2;
@@ -51,7 +72,8 @@ class SignalingController extends Controller
             'status' => 'ok',
             'room' => $roomKey,
             'participants_count' => count($participants),
-            'ready' => $isReady
+            'ready' => $isReady,
+            'server_time' => microtime(true)
         ]);
     }
 
@@ -61,26 +83,57 @@ class SignalingController extends Controller
     public function signal(Request $request)
     {
         $appointmentId = $request->input('appointment_id') ?: $request->input('appointmentId') ?: $request->query('appointment_id') ?: $request->query('appointmentId');
+        $senderId = $request->user() ? $request->user()->id : ($request->input('userId') ?: $request->input('user_id') ?: $request->query('userId') ?: $request->query('user_id'));
         $targetId = $request->input('target') ?: $request->input('receiverId') ?: $request->input('receiver_id') ?: $request->query('target') ?: $request->query('receiverId') ?: $request->query('receiver_id');
         $signal = $request->input('signal');
-        $senderId = $request->user() ? $request->user()->id : ($request->input('userId') ?: $request->input('user_id') ?: $request->query('userId') ?: $request->query('user_id'));
 
-        if (!$appointmentId || !$targetId || !$signal) {
+        if (!$appointmentId || !$signal) {
             return response()->json(['status' => 'error', 'message' => 'Missing signal parameters'], 400);
         }
 
-        $queueKey = "signaling_queue_{$appointmentId}_{$targetId}";
-        $queue = Cache::get($queueKey, []);
+        $appointmentId = (int)$appointmentId;
+        $senderId = (int)$senderId;
 
-        $queue[] = [
+        // Parse signal if delivered as string
+        if (is_string($signal)) {
+            $decoded = json_decode($signal, true);
+            if ($decoded) {
+                $signal = $decoded;
+            }
+        }
+
+        $signalItem = [
+            'id' => uniqid('sig_', true),
             'sender_id' => $senderId,
+            'target_id' => $targetId ? (int)$targetId : null,
             'signal' => $signal,
             'timestamp' => microtime(true)
         ];
 
-        Cache::put($queueKey, $queue, now()->addMinutes(5));
+        // 1. Store in appointment room broadcast queue
+        $roomQueueKey = "signaling_room_queue_{$appointmentId}";
+        $roomQueue = Cache::get($roomQueueKey, []);
+        $roomQueue[] = $signalItem;
 
-        return response()->json(['status' => 'sent', 'count' => count($queue)]);
+        // Keep at most 100 signals in room history
+        if (count($roomQueue) > 100) {
+            $roomQueue = array_slice($roomQueue, -100);
+        }
+        Cache::put($roomQueueKey, $roomQueue, now()->addMinutes(15));
+
+        // 2. Also push to target-specific queue if specified for backwards compatibility
+        if ($targetId) {
+            $legacyKey = "signaling_queue_{$appointmentId}_{$targetId}";
+            $legacyQueue = Cache::get($legacyKey, []);
+            $legacyQueue[] = $signalItem;
+            Cache::put($legacyKey, $legacyQueue, now()->addMinutes(5));
+        }
+
+        return response()->json([
+            'status' => 'sent',
+            'id' => $signalItem['id'],
+            'timestamp' => $signalItem['timestamp']
+        ]);
     }
 
     /**
@@ -90,45 +143,70 @@ class SignalingController extends Controller
     {
         $appointmentId = $request->input('appointment_id') ?: $request->input('appointmentId') ?: $request->query('appointment_id') ?: $request->query('appointmentId');
         $userId = $request->user() ? $request->user()->id : ($request->input('userId') ?: $request->input('user_id') ?: $request->query('userId') ?: $request->query('user_id'));
+        $lastTimestamp = (float)($request->input('last_timestamp') ?: $request->query('last_timestamp') ?: 0);
 
         if (!$appointmentId || !$userId) {
             return response()->json(['status' => 'error', 'message' => 'Missing appointmentId or userId'], 400);
         }
 
+        $appointmentId = (int)$appointmentId;
+        $userId = (int)$userId;
+        $now = microtime(true);
+
         // 1. Update heartbeat in room
         $roomKey = "signaling_room_{$appointmentId}";
         $participants = Cache::get($roomKey, []);
         if (isset($participants[$userId])) {
-            $participants[$userId]['last_seen'] = now()->timestamp;
+            $participants[$userId]['last_seen'] = $now;
             Cache::put($roomKey, $participants, now()->addMinutes(30));
         }
 
         // Clean out stale participants (>45s inactive)
         $activeCount = 0;
-        $now = now()->timestamp;
         foreach ($participants as $pid => $pdata) {
             if (($now - ($pdata['last_seen'] ?? 0)) < 45) {
                 $activeCount++;
             }
         }
 
-        // 2. Fetch queued signals for this user
-        $queueKey = "signaling_queue_{$appointmentId}_{$userId}";
-        $signals = Cache::get($queueKey, []);
-        if (!empty($signals)) {
-            Cache::forget($queueKey);
+        // 2. Fetch room signals where sender != current userId and timestamp > lastTimestamp
+        $roomQueueKey = "signaling_room_queue_{$appointmentId}";
+        $roomQueue = Cache::get($roomQueueKey, []);
+        $pendingSignals = [];
+
+        foreach ($roomQueue as $item) {
+            $senderId = (int)($item['sender_id'] ?? 0);
+            $sigTime = (float)($item['timestamp'] ?? 0);
+
+            // Filter out own signals and already-consumed signals
+            if ($senderId !== $userId && $sigTime > ($lastTimestamp + 0.000001)) {
+                $pendingSignals[] = $item;
+            }
         }
 
-        // 3. Check if call ended
+        // 3. Clear legacy queue if exists
+        $legacyKey = "signaling_queue_{$appointmentId}_{$userId}";
+        $legacyQueue = Cache::get($legacyKey, []);
+        if (!empty($legacyQueue)) {
+            Cache::forget($legacyKey);
+            foreach ($legacyQueue as $lItem) {
+                if (!in_array($lItem['id'] ?? '', array_column($pendingSignals, 'id'))) {
+                    $pendingSignals[] = $lItem;
+                }
+            }
+        }
+
+        // 4. Check if call ended
         $endedKey = "signaling_ended_{$appointmentId}";
         $ended = Cache::get($endedKey, false);
 
         return response()->json([
             'status' => 'ok',
-            'signals' => $signals,
+            'signals' => $pendingSignals,
             'ready' => $activeCount >= 2,
             'participants_count' => $activeCount,
-            'ended' => (bool)$ended
+            'ended' => (bool)$ended,
+            'server_time' => $now
         ]);
     }
 
@@ -158,13 +236,15 @@ class SignalingController extends Controller
     {
         $appointmentId = $request->input('appointment_id') ?: $request->input('appointmentId') ?: $request->query('appointment_id') ?: $request->query('appointmentId');
         if ($appointmentId) {
+            $appointmentId = (int)$appointmentId;
             $endedKey = "signaling_ended_{$appointmentId}";
             Cache::put($endedKey, true, now()->addMinutes(5));
 
-            $roomKey = "signaling_room_{$appointmentId}";
-            Cache::forget($roomKey);
+            Cache::forget("signaling_room_{$appointmentId}");
+            Cache::forget("signaling_room_queue_{$appointmentId}");
         }
 
         return response()->json(['status' => 'ended']);
     }
 }
+
