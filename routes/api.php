@@ -42,7 +42,9 @@ Route::post('/signaling/join', [App\Http\Controllers\SignalingController::class,
 Route::post('/signaling/signal', [App\Http\Controllers\SignalingController::class, 'signal']);
 Route::get('/signaling/poll', [App\Http\Controllers\SignalingController::class, 'poll']);
 Route::get('/signaling/check-incoming', [App\Http\Controllers\SignalingController::class, 'checkIncoming']);
+Route::post('/signaling/dismiss-incoming', [App\Http\Controllers\SignalingController::class, 'dismissIncoming']);
 Route::post('/signaling/end', [App\Http\Controllers\SignalingController::class, 'end']);
+
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [App\Http\Controllers\AuthController::class, 'logout']);

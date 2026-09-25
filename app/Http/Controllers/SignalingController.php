@@ -220,13 +220,53 @@ class SignalingController extends Controller
             return response()->json(['status' => 'error'], 400);
         }
 
+        $userId = (int)$userId;
         $alertKey = "signaling_incoming_{$userId}";
         $incoming = Cache::get($alertKey);
+
+        if (!$incoming) {
+            return response()->json(['status' => 'ok', 'incoming' => null]);
+        }
+
+        // Validate that caller is still actively in the call room
+        $appointmentId = (int)($incoming['appointment_id'] ?? 0);
+        $senderId = (int)($incoming['sender_id'] ?? 0);
+
+        if ($appointmentId > 0) {
+            $ended = Cache::get("signaling_ended_{$appointmentId}", false);
+            $roomKey = "signaling_room_{$appointmentId}";
+            $participants = Cache::get($roomKey, []);
+
+            $senderActive = false;
+            if ($senderId > 0 && isset($participants[$senderId])) {
+                $lastSeen = (float)($participants[$senderId]['last_seen'] ?? 0);
+                if ((microtime(true) - $lastSeen) < 25) {
+                    $senderActive = true;
+                }
+            }
+
+            if ($ended || !$senderActive) {
+                Cache::forget($alertKey);
+                return response()->json(['status' => 'ok', 'incoming' => null]);
+            }
+        }
 
         return response()->json([
             'status' => 'ok',
             'incoming' => $incoming
         ]);
+    }
+
+    /**
+     * Dismiss / clear pending incoming call alert
+     */
+    public function dismissIncoming(Request $request)
+    {
+        $userId = $request->user() ? $request->user()->id : ($request->input('userId') ?: $request->input('user_id') ?: $request->query('userId') ?: $request->query('user_id'));
+        if ($userId) {
+            Cache::forget("signaling_incoming_{(int)$userId}");
+        }
+        return response()->json(['status' => 'ok']);
     }
 
     /**
@@ -242,9 +282,19 @@ class SignalingController extends Controller
 
             Cache::forget("signaling_room_{$appointmentId}");
             Cache::forget("signaling_room_queue_{$appointmentId}");
+
+            // Clear any alerts linked to this appointment
+            try {
+                $appointment = Appointment::find($appointmentId);
+                if ($appointment) {
+                    Cache::forget("signaling_incoming_{$appointment->patient_id}");
+                    Cache::forget("signaling_incoming_{$appointment->doctor_id}");
+                }
+            } catch (\Exception $e) {}
         }
 
         return response()->json(['status' => 'ended']);
     }
 }
+
 
